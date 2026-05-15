@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Value Distribution Analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: #fff;
+    color: #0f1115;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  #root { padding: 40px 32px; max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 28px; }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px;
+  }
+  .panel-title { font-size: 15px; color: #0f1115; font-weight: 500; }
+  .panel-tools {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: #5b6068;
+  }
+  .pill {
+    border: 1px solid #e3e6ea; border-radius: 8px;
+    padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px;
+    background: #fff; cursor: pointer;
+  }
+  .replay {
+    margin-top: 16px; padding: 8px 14px;
+    border: 1px solid #e3e6ea; border-radius: 8px; background: #fff;
+    font-family: inherit; font-size: 13px; cursor: pointer;
+  }
+  .replay:hover { background: #f5f7fa; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo } = React;
+
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+// Rectangle path with selectively rounded corners.
+// corners: { tl, tr, br, bl } — radius per corner (0 = square).
+function roundedRectPath(x, y, w, h, corners) {
+  const { tl = 0, tr = 0, br = 0, bl = 0 } = corners;
+  return [
+    `M ${x + tl} ${y}`,
+    `H ${x + w - tr}`,
+    tr ? `A ${tr} ${tr} 0 0 1 ${x + w} ${y + tr}` : '',
+    `V ${y + h - br}`,
+    br ? `A ${br} ${br} 0 0 1 ${x + w - br} ${y + h}` : '',
+    `H ${x + bl}`,
+    bl ? `A ${bl} ${bl} 0 0 1 ${x} ${y + h - bl}` : '',
+    `V ${y + tl}`,
+    tl ? `A ${tl} ${tl} 0 0 1 ${x + tl} ${y}` : '',
+    'Z',
+  ].filter(Boolean).join(' ');
+}
+
+function useAnimatedProgress(duration, replayKey) {
+  const [p, setP] = useState(0);
+  const rafRef = useRef();
+  useEffect(() => {
+    setP(0);
+    const start = performance.now();
+    const tick = (now) => {
+      const t = Math.min(1, (now - start) / duration);
+      setP(easeOutCubic(t));
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [duration, replayKey]);
+  return p;
+}
+
+function BoxPlotChart({
+  data,
+  yMin = 0,
+  yMax = 1,
+  yTicks = [0, 0.2, 0.4, 0.6, 0.8, 1.0],
+  duration = 1600,
+  replayKey,
+}) {
+  const W = 880;
+  const H = 460;
+  const PAD = { top: 24, right: 32, bottom: 48, left: 56 };
+  const plotW = W - PAD.left - PAD.right;
+  const plotH = H - PAD.top - PAD.bottom;
+
+  const y = (v) => PAD.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+  const colW = plotW / data.length;
+  const cx = (i) => PAD.left + colW * (i + 0.5);
+
+  const progress = useAnimatedProgress(duration, replayKey);
+  const localProgress = (i) => clamp((progress - i * 0.08) / 0.6, 0, 1);
+
+  const BOX_W = Math.min(72, colW * 0.55);
+  const CAP_W = BOX_W * 0.38;
+
+  // Solid blue fill, matching the reference
+  const BOX_FILL = '#2929d4';
+  const STROKE = '#2929d4';
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ width: '100%', height: 'auto', display: 'block' }}
+    >
+      {yTicks.map((t) => (
+        <g key={t}>
+          <line
+            x1={PAD.left} x2={W - PAD.right}
+            y1={y(t)} y2={y(t)}
+            stroke="#e8ecf1" strokeWidth="1" strokeDasharray="2 4"
+          />
+          <text
+            x={PAD.left - 12} y={y(t) + 4}
+            textAnchor="end" fontSize="12" fill="#8a8f97"
+            fontFamily="Inter, sans-serif"
+          >
+            {t.toFixed(1)}
+          </text>
+        </g>
+      ))}
+
+      {data.map((d, i) => {
+        const p = localProgress(i);
+        const cX = cx(i);
+        const medY = y(d.median);
+        const minY = medY + (y(d.min) - medY) * p;
+        const maxY = medY + (y(d.max) - medY) * p;
+        const q1Y  = medY + (y(d.q1)  - medY) * p;
+        const q3Y  = medY + (y(d.q3)  - medY) * p;
+
+        // gap between the two halves where the median line sits
+        const GAP = 6;
+        const topH    = Math.max(0, medY - GAP / 2 - q3Y);
+        const bottomH = Math.max(0, q1Y - (medY + GAP / 2));
+
+        const medOpacity = clamp((p - 0.25) / 0.35, 0, 1);
+
+        return (
+          <g key={d.label}>
+            {/* upper whisker — from top cap down to top of upper box */}
+            <line
+              x1={cX} x2={cX}
+              y1={maxY} y2={Math.min(q3Y, medY - GAP / 2)}
+              stroke={STROKE} strokeWidth="1" strokeLinecap="round"
+            />
+            {/* lower whisker — from bottom of lower box down to bottom cap */}
+            <line
+              x1={cX} x2={cX}
+              y1={Math.max(q1Y, medY + GAP / 2)} y2={minY}
+              stroke={STROKE} strokeWidth="1" strokeLinecap="round"
+            />
+            {/* top whisker cap */}
+            <line
+              x1={cX - CAP_W / 2} x2={cX + CAP_W / 2}
+              y1={maxY} y2={maxY}
+              stroke={STROKE} strokeWidth="1.5" strokeLinecap="round"
+            />
+            {/* bottom whisker cap */}
+            <line
+              x1={cX - CAP_W / 2} x2={cX + CAP_W / 2}
+              y1={minY} y2={minY}
+              stroke={STROKE} strokeWidth="1.5" strokeLinecap="round"
+            />
+            {/* IQR — top half (Q3 → median): rounded only on top corners */}
+            {topH > 0 && (
+              <path
+                d={roundedRectPath(
+                  cX - BOX_W / 2, q3Y, BOX_W, topH,
+                  { tl: 8, tr: 8, br: 0, bl: 0 }
+                )}
+                fill={BOX_FILL}
+              />
+            )}
+            {/* IQR — bottom half (median → Q1): rounded only on bottom corners */}
+            {bottomH > 0 && (
+              <path
+                d={roundedRectPath(
+                  cX - BOX_W / 2, medY + GAP / 2, BOX_W, bottomH,
+                  { tl: 0, tr: 0, br: 8, bl: 8 }
+                )}
+                fill={BOX_FILL}
+              />
+            )}
+            {/* median line — passes through the gap, slight overhang */}
+            <line
+              x1={cX - BOX_W / 2 - 4} x2={cX + BOX_W / 2 + 4}
+              y1={medY} y2={medY}
+              stroke="#2f9a4a" strokeWidth="1.5" strokeLinecap="round"
+              opacity={medOpacity}
+            />
+            <text
+              x={cX} y={H - 16}
+              textAnchor="middle" fontSize="13" fill="#5b6068"
+              fontFamily="Inter, sans-serif"
+            >
+              {d.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+const sampleData = [
+  { label: 'bid_price',         min: 0.03, q1: 0.60, median: 0.70, q3: 0.78, max: 0.99 },
+  { label: 'ask_price',         min: 0.03, q1: 0.60, median: 0.66, q3: 0.78, max: 0.96 },
+  { label: 'mid_price',         min: 0.03, q1: 0.46, median: 0.52, q3: 0.60, max: 0.97 },
+  { label: 'yield_to_maturity', min: 0.02, q1: 0.66, median: 0.71, q3: 0.80, max: 0.98 },
+  { label: 'convexity',         min: 0.00, q1: 0.35, median: 0.41, q3: 0.52, max: 0.95 },
+];
+
+function App() {
+  const [runId, setRunId] = useState(0);
+  return (
+    <div>
+      <h1>Value Distribution Analysis</h1>
+      <div className="panel-head">
+        <div className="panel-title">Compare Value Distribution</div>
+        <div className="panel-tools">
+          <span>Columns</span>
+          <span className="pill">All <span style={{ fontSize: 10 }}>▾</span></span>
+          <span style={{ cursor: 'pointer' }}>•••</span>
+        </div>
+      </div>
+      <BoxPlotChart data={sampleData} replayKey={runId} />
+      <button className="replay" onClick={() => setRunId((r) => r + 1)}>
+        ↻ Replay animation
+      </button>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
